@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 
-import math
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 
