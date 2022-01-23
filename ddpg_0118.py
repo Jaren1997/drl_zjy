@@ -1,14 +1,21 @@
 # coding=utf-8
-from multiprocessing.dummy import active_children
 import numpy as np
-import math
+import gym
+import pandas as pd
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 
 GAMMA = 0.9     # reward discount in TD error
+LR_A = 0.001    # learning rate for actor
+LR_C = 0.01     # learning rate for critic
+OUTPUT_GRAPH = False
+MAX_EPISODE = 500
+DISPLAY_REWARD_THRESHOLD = 200  # renders environment if total episode reward is greater then this threshold
+MAX_EP_STEPS = 2000   # maximum time step in one episode
+RENDER = False  # rendering wastes time
 
 class Actor(object):
-    def __init__(self, sess, act_dim, obs_dim, lr=0.001):
+    def __init__(self, sess, act_dim, obs_dim, lr):
         self.sess = sess
 
         self.s = tf.placeholder(tf.float32, [1, obs_dim], "state")
@@ -42,8 +49,11 @@ class Actor(object):
             self.cost = tf.reduce_mean(-1.0 * self.Q)
 
     def choose_action(self, obs):
-        s = np.hstack((obs[0], obs[1]))[np.newaxis, :]
-        return self.sess.run(self.acts_prob, {self.s: s})
+        # s = np.hstack((obs[0], obs[1]))[np.newaxis, :]
+        # return self.sess.run(self.acts_prob, {self.s: s})
+        s = obs[np.newaxis, :] # 外面再套一个[]
+        probs = self.sess.run(self.acts_prob, {self.s: s})   # get probabilities for all actions
+        return np.random.choice(np.arange(probs.shape[1]), p=probs.ravel())
 
     def learn(self, Q): # Q从critic网络得到
         self.sess.run(self.train_op, {self.cost: Q})
@@ -89,19 +99,19 @@ class Critic(object):
         self.sess.run([self.td_error, self.train_op], {self.Q: Q, self.target_Q_next: target_Q_next, self.r: r})
 
     def value(self, obs, action):
-        s = np.hstack((obs[0], obs[1]))[np.newaxis, :]
+        # s = np.hstack((obs[0], obs[1]))[np.newaxis, :]
+        s = obs[np.newaxis, :] # 外面再套一个[]
         s_a = tf.concat([s, action], 1)
         self.sess.run(self.Q, {self.s_a: s_a})
         return self.Q
 
 class DDPG(object):
-    def __init__(self, sess, actor_model, critic_model, ):
+    def __init__(self, sess, actor_model, critic_model):
         self.actor_model = actor_model
         self.critic_model = critic_model
         self.sess = sess
 
-    def actor_learn(self, obs):
-        action = self.actor_model.choose_action(obs)
+    def actor_learn(self, obs, action):
         Q = self.critic_model.value(obs, action)
         self.actor_model.learn(Q)
         
@@ -111,4 +121,48 @@ class DDPG(object):
         target_Q_next = self.critic_model.value(obs_next, a_next) # 这里应该用target_Q网络
         self.critic_model.learn(Q, reward, target_Q_next)
 
+env = gym.make('CartPole-v0')
+env.seed(1)
+env = env.unwrapped
 
+obs_dim = env.observation_space[0]
+act_dim = env.action_space.n
+
+sess = tf.Session()
+actor = Actor(sess, act_dim = act_dim, obs_dim = obs_dim, lr=LR_A)
+critic = Critic(sess, act_dim = act_dim, obs_dim = obs_dim, lr=LR_C)
+ddpg = DDPG(sess, actor, critic)
+
+sess.run(tf.global_variables_initializer())
+
+res = []
+for i_episode in range(MAX_EPISODE):
+    s = env.reset()
+    t = 0
+    track_r = []
+    while True:
+        if RENDER: env.render()
+
+        a = actor.choose_action(s)
+        s_, r, done, info = env.step(a)
+        if done: r = -20
+
+        ddpg.actor_learn(s, a)
+        ddpg.critic_learn(s, a, r, s_)
+
+        s = s_
+        t += 1
+
+        if done or t >= MAX_EP_STEPS:
+            ep_rs_sum = sum(track_r)
+
+            if 'running_reward' not in globals():
+                running_reward = ep_rs_sum
+            else:
+                running_reward = running_reward * 0.95 + ep_rs_sum * 0.05
+            if running_reward > DISPLAY_REWARD_THRESHOLD: RENDER = True  # rendering
+            print("episode:", i_episode, "  reward:", int(running_reward))
+            res.append([i_episode, running_reward])
+            break
+
+pd.DataFrame(res,columns=['episode','a2c_reward']).to_csv('../a2c_reward.csv')
