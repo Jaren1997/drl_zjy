@@ -15,13 +15,12 @@ MAX_EP_STEPS = 2000   # maximum time step in one episode
 RENDER = False  # rendering wastes time
 
 class Actor(object):
-    def __init__(self, sess, act_dim, obs_dim, lr):
+    def __init__(self, sess, act_dim, obs_dim, lr=0.001):
         self.sess = sess
 
         self.s = tf.placeholder(tf.float32, [1, obs_dim], "state")
         self.a = tf.placeholder(tf.float32, [1, act_dim], "action")
         self.Q = tf.placeholder(tf.float32, None, "Q")
-        self.cost = self.Q = tf.placeholder(tf.float32, None, "cost")
         
         with tf.variable_scope('Actor'):
             l1 = tf.layers.dense(
@@ -42,11 +41,13 @@ class Actor(object):
                 name='acts_prob'
             )
 
+        with tf.variable_scope('cost'):
+            self.cost = tf.reduce_mean(-self.Q)
+            # log_prob = tf.log(self.acts_prob[0, self.a])
+            # self.cost = tf.reduce_mean(log_prob * self.Q)  # advantage (TD_error) guided loss
+
         with tf.variable_scope('train'):
             self.train_op = tf.train.AdamOptimizer(lr).minimize(-self.cost)
-
-        with tf.variable_scope('cost'):
-            self.cost = tf.reduce_mean(-1.0 * self.Q)
 
     def choose_action(self, obs):
         # s = np.hstack((obs[0], obs[1]))[np.newaxis, :]
@@ -56,7 +57,7 @@ class Actor(object):
         return np.random.choice(np.arange(probs.shape[1]), p=probs.ravel())
 
     def learn(self, Q): # Q从critic网络得到
-        self.sess.run(self.train_op, {self.cost: Q})
+        self.sess.run([self.cost, self.train_op], {self.Q: Q})
         
 class Critic(object):
     def __init__(self, sess, act_dim, obs_dim, lr):
@@ -125,7 +126,7 @@ env = gym.make('CartPole-v0')
 env.seed(1)
 env = env.unwrapped
 
-obs_dim = env.observation_space[0]
+obs_dim = env.observation_space.shape[0]
 act_dim = env.action_space.n
 
 sess = tf.Session()
